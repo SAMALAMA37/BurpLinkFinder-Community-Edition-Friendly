@@ -1,6 +1,6 @@
 #
 #  BurpLinkFinder - Find links within JS files.
-#  Community Edition Friendly Version (with Scope Check)
+#  Community Edition Friendly Version (with Scope & Redundancy Check)
 #
 #  Copyright (c) 2022 Frans Hendrik Botes
 #  Credit to https://github.com/GerbenJavado/LinkFinder for the idea and regex
@@ -45,8 +45,11 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         callbacks.setExtensionName("BurpJSLinkFinderCE")
         callbacks.issueAlert("BurpJSLinkFinderCE Passive Scanner enabled")
 
-        # Register as an HTTP listener instead of a scanner check for Community Edition compatibility
+        # Register as an HTTP listener
         callbacks.registerHttpListener(self)
+        
+        # <<< --- FIX: Set to store URLs that have been processed --- >>>
+        self.processed_urls = set()
         
         self.threads = []
         self.initUI()
@@ -66,13 +69,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
 
     def initUI(self):
         self._parentPane = swing.JTabbedPane()
-        # The main split pane for the components
         self._splitpane = swing.JSplitPane(swing.JSplitPane.HORIZONTAL_SPLIT)
         self._splitpane.setDividerLocation(800)
-        # The split pane for the mapping and filenames
         self._splitpane2 = swing.JSplitPane(swing.JSplitPane.VERTICAL_SPLIT)
         self._splitpane2.setDividerLocation(300)
-        # UI for Log Output
         self.logPanel = swing.JPanel()
         self.outputLabel = swing.JLabel("LinkFinder Log:")
         self.outputLabel.setFont(Font("Tahoma", Font.BOLD, 12))
@@ -85,12 +85,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.clearBtn = swing.JButton("Clear", actionPerformed=self.clearLog)
         self.exportBtn = swing.JButton("Export", actionPerformed=self.exportLog)
         self.parentFrm = swing.JFileChooser()
-        # Layout
         layout = swing.GroupLayout(self.logPanel)
         layout.setAutoCreateGaps(True)
         layout.setAutoCreateContainerGaps(True)
         self.logPanel.setLayout(layout)
-      
         layout.setHorizontalGroup(
             layout.createParallelGroup()
             .addGroup(layout.createSequentialGroup()
@@ -113,8 +111,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 )
             )
         )
-
-        # UI for Filenames Pane
         self.filePanel = swing.JPanel()
         self.fileNamesLabel = swing.JLabel("Filenames:")
         self.fileNamesLabel.setFont(Font("Tahoma", Font.BOLD, 12))
@@ -125,13 +121,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.filesTxtArea.setLineWrap(True)
         self.filesPane.setViewportView(self.filesTxtArea)
         self.clearFilesBtn = swing.JButton("Clear", actionPerformed=self.clearFilseLog)
-
-        # Layout
         layoutf = swing.GroupLayout(self.filePanel)
         layoutf.setAutoCreateGaps(True)
         layoutf.setAutoCreateContainerGaps(True)
         self.filePanel.setLayout(layoutf)
-      
         layoutf.setHorizontalGroup(
             layoutf.createParallelGroup()
             .addGroup(layoutf.createSequentialGroup()
@@ -152,8 +145,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 )
             )
         )
-
-        # UI for Mapped Pane
         self.mapPanel = swing.JPanel()
         self.mapLabel = swing.JLabel("Mapped:")
         self.mapLabel.setFont(Font("Tahoma", Font.BOLD, 12))
@@ -165,12 +156,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.mapPane.setViewportView(self.mapTxtArea)
         self.clearMapBtn = swing.JButton("Clear", actionPerformed=self.clearMAPLog)
         self.mapMapBtn = swing.JButton("Map", actionPerformed=self.mapMaps)
-        # Layout
         layoutm = swing.GroupLayout(self.mapPanel)
         layoutm.setAutoCreateGaps(True)
         layoutm.setAutoCreateContainerGaps(True)
         self.mapPanel.setLayout(layoutm)
-      
         layoutm.setHorizontalGroup(
             layoutm.createParallelGroup()
             .addGroup(layoutm.createSequentialGroup()
@@ -193,8 +182,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 )
             )
         )
-
-        #Set up all the panes
         self._splitpane.setLeftComponent(self.logPanel)
         self._splitpane2.setTopComponent(self.filePanel)
         self._splitpane2.setBottomComponent(self.mapPanel)
@@ -209,6 +196,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         
     def clearLog(self, event):
           self.outputTxtArea.setText("BurpJS LinkFinder (Community Edition) loaded." + "\n" + "Copyright (c) 2022 Frans Hendrik Botes" + "\n" )
+          # Also clear the set of processed URLs
+          self.processed_urls.clear()
           
     def clearFilseLog(self, event):
           self.filesTxtArea.setText("")
@@ -222,58 +211,55 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         if ret == swing.JFileChooser.APPROVE_OPTION:
             filename = chooseFile.getSelectedFile().getCanonicalPath()
             self.callbacks.printOutput("\n" + "Export to : " + filename)
-            # Use try-with-resources to ensure the file is closed
             try:
                 with open(filename, 'w') as f:
                     f.write(self.outputTxtArea.text)
             except IOError as e:
                 self.callbacks.printError("Error writing to file: " + str(e))
 
-    #
-    # implement IHttpListener
-    #
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
-        # only process responses
         if not messageIsRequest:
-            
-            # <<< --- SCOPE CHECK --- >>>
-            # Check if the URL of the response is in scope before processing
             url = messageInfo.getUrl()
+            url_str = str(url)
+
+            # <<< --- FIX: Check if URL has already been processed --- >>>
+            if url_str in self.processed_urls:
+                return
+            
+            # Check if the URL is in scope
             if not self.callbacks.isInScope(url):
                 return
-            # <<< ------------------- >>>
-
+            
             response = messageInfo.getResponse()
             if response:
+                # Check MIME type
                 responseInfo = self.helpers.analyzeResponse(response)
                 mime_type = responseInfo.getStatedMimeType()
                 
-                # Check if it's a JavaScript file
-                if mime_type and 'javascript' in mime_type.lower() or '.js' in str(messageInfo.getUrl()):
+                if mime_type and ('javascript' in mime_type.lower() or 'json' in mime_type.lower()) or '.js' in url_str or '.json' in url_str:
+                    
+                    # <<< --- FIX: Add to processed set before analysis --- >>>
+                    self.processed_urls.add(url_str)
+                    
                     try:
-                        urlReq = messageInfo.getUrl()
-                        testString = str(urlReq)
-                        linkA = linkAnalyse(messageInfo, self.callbacks, self.helpers)
-
                         # Exclude casual JS files
-                        if any(x in testString for x in JSExclusionList):
-                            self.callbacks.printOutput("\n" + "[-] URL excluded " + str(urlReq))
+                        if any(x in url_str for x in JSExclusionList):
+                            self.callbacks.printOutput("\n" + "[-] URL excluded " + url_str)
                         else:
-                            self.outputTxtArea.append("\n" + "[+] Valid URL found: " + str(urlReq))
+                            self.outputTxtArea.append("\n" + "[+] Valid URL found: " + url_str)
+                            linkA = linkAnalyse(messageInfo, self.callbacks, self.helpers)
                             issueText = linkA.analyseURL()
                             
                             for counter, issue in enumerate(issueText):
                                 self.outputTxtArea.append("\n" + "\t" + issue['link'])
                                 
-                                # Add to Mapped links pane for further actions
                                 fullURL = issue['link']
                                 if not linkA.valcheckFullURL(issue['link']):
-                                    fullURL = urlparse.urljoin(str(urlReq), issue['link'])
+                                    fullURL = urlparse.urljoin(url_str, issue['link'])
                                 
                                 if linkA.valcheckMappedList(fullURL, self.mapTxtArea):
                                     self.mapTxtArea.append("\n" + fullURL)
                                 
-                                # Add to Filenames pane
                                 filNam = path.basename(issue['link'].split('?')[0])
                                 if linkA.isNotBlank(filNam) and linkA.checkValidFile(filNam) and (filNam not in self.filesTxtArea.text):
                                     self.filesTxtArea.append("\n" + filNam)
@@ -312,29 +298,22 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         URL_SPLIT = str(url).split("://",1)
         URL_PROTOCAL = URL_SPLIT[0]
         URL_PORT = 443 if URL_PROTOCAL == 'https' else 80
-        
         URL_HOSTNAME_PATH = URL_SPLIT[1]
         URL_HOSTNAME = URL_HOSTNAME_PATH.split('/')[0].split('?')[0]
-        
         if ':' in URL_HOSTNAME:
             URL_HOSTNAME, URL_PORT_STR = URL_HOSTNAME.split(':', 1)
             URL_PORT = int(URL_PORT_STR)
-            
         URL_HOST_SERVICE = self.helpers.buildHttpService(URL_HOSTNAME, URL_PORT, URL_PROTOCAL == 'https')
         return URL_SPLIT, URL_PROTOCAL, URL_HOSTNAME, URL_PORT, URL_HOST_SERVICE
-
 
     def ProcessURL(self,url):
         if url.startswith('http://') or url.startswith('https://'):
             try:
-                # <<< --- SCOPE CHECK --- >>>
                 # Check if the discovered URL is in scope before sending a request
                 if not self.callbacks.isInScope(URL(url)):
                     return
-                # <<< ------------------- >>>
             
                 URL_SPLIT,URL_PROTOCAL,URL_HOSTNAME,URL_PORT,URL_HOST_SERVICE = self.URL_SPLITTER(url)
-                
                 request = self.helpers.buildHttpRequest(URL(url))
                 resp = self.callbacks.makeHttpRequest(URL_HOST_SERVICE, request)
 
@@ -406,27 +385,21 @@ class linkAnalyse():
         return myString and myString.strip()
 
     def valcheckMappedList(self,myString,mapTxtArea):
-        # This check is inherently slow on large text areas. 
-        # A set would be better for performance, but for UI consistency, this is acceptable.
         return myString not in mapTxtArea.text
     
     def valcheckFullURL(self,myString):
         return myString.lower().startswith(('http:', 'https:'))
 
-# This class is not used to raise issues in Community Edition, but is kept for structure.
 class SRI(IScanIssue):
     def __init__(self, reqres, helpers, callbacks, links, full_urls, highlights):
         self.helpers = helpers
         self.callbacks = callbacks
         self.links = sorted(list(set(links)))
         self.full_urls = sorted(list(set(full_urls)))
-        
         al = ArrayList()
         for h in highlights:
             al.add(array([h[0], h[1]], 'i'))
-        
         self.reqres = self.callbacks.applyMarkers(reqres, None, al)
-        
         self.issue_detail = "Burp Scanner has analysed this JS file and has discovered the following link values: <ul>\n"
         for link in self.links:
             self.issue_detail += "<li>{}</li>\n".format(cgi.escape(link))
@@ -434,45 +407,17 @@ class SRI(IScanIssue):
         for url in self.full_urls:
             self.issue_detail += "<li>{}</li>\n".format(cgi.escape(url))
         self.issue_detail += "</ul>"
-
-    def getHost(self):
-        return self.reqres.getHost()
-
-    def getPort(self):
-        return self.reqres.getPort()
-
-    def getProtocol(self):
-        return self.reqres.getProtocol()
-
-    def getUrl(self):
-        return self.reqres.getUrl()
-
-    def getIssueName(self):
-        return "Linkfinder Analysed JS files"
-
-    def getIssueType(self):
-        return 0x08000000
-
-    def getSeverity(self):
-        return "Information"
-
-    def getConfidence(self):
-        return "Certain"
-
-    def getIssueBackground(self):
-        return "JS files can hold links to other parts of web applications. This extension passively finds them and reports them for further investigation."
-
-    def getRemediationBackground(self):
-        return None
-
-    def getIssueDetail(self):
-        return self.issue_detail
-
-    def getRemediationDetail(self):
-        return None
-
-    def getHttpMessages(self):
-        return [self.reqres]
-        
-    def getHttpService(self):
-        return self.reqres.getHttpService()
+    def getHost(self): return self.reqres.getHost()
+    def getPort(self): return self.reqres.getPort()
+    def getProtocol(self): return self.reqres.getProtocol()
+    def getUrl(self): return self.reqres.getUrl()
+    def getIssueName(self): return "Linkfinder Analysed JS files"
+    def getIssueType(self): return 0x08000000
+    def getSeverity(self): return "Information"
+    def getConfidence(self): return "Certain"
+    def getIssueBackground(self): return "JS files can hold links to other parts of web applications. This extension passively finds them and reports them for further investigation."
+    def getRemediationBackground(self): return None
+    def getIssueDetail(self): return self.issue_detail
+    def getRemediationDetail(self): return None
+    def getHttpMessages(self): return [self.reqres]
+    def getHttpService(self): return self.reqres.getHttpService()
