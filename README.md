@@ -1,4 +1,14 @@
-#  BurpJSLinkFinder - Find links within JS files.
+#  BurpLinkFinder Community Edition Friendly - Find links within JS files.
+
+slightly modified extension to support community edition version of Burp Suite, modified for personal needs
+
+It hasn't been farly tested, so pls report any issues
+
+
+
+special thanks: Gemini2.5 Pro
+
+
 ![Follow on Twitter](https://img.shields.io/twitter/follow/frans_initroot?label=Follow%20&style=social)
 ![GitHub last commit](https://img.shields.io/github/last-commit/initroot/BurpJSLinkFinder)
 ![GitHub stars](https://img.shields.io/github/stars/initroot/BurpJSLinkFinder)
