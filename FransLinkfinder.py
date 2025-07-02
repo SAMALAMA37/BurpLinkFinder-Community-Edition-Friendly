@@ -1,6 +1,6 @@
 #
 #  BurpLinkFinder - Find links within JS files.
-#  Community Edition Friendly Version
+#  Community Edition Friendly Version (with Scope Check)
 #
 #  Copyright (c) 2022 Frans Hendrik Botes
 #  Credit to https://github.com/GerbenJavado/LinkFinder for the idea and regex
@@ -235,6 +235,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         # only process responses
         if not messageIsRequest:
+            
+            # <<< --- SCOPE CHECK --- >>>
+            # Check if the URL of the response is in scope before processing
+            url = messageInfo.getUrl()
+            if not self.callbacks.isInScope(url):
+                return
+            # <<< ------------------- >>>
+
             response = messageInfo.getResponse()
             if response:
                 responseInfo = self.helpers.analyzeResponse(response)
@@ -319,12 +327,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
     def ProcessURL(self,url):
         if url.startswith('http://') or url.startswith('https://'):
             try:
+                # <<< --- SCOPE CHECK --- >>>
+                # Check if the discovered URL is in scope before sending a request
+                if not self.callbacks.isInScope(URL(url)):
+                    return
+                # <<< ------------------- >>>
+            
                 URL_SPLIT,URL_PROTOCAL,URL_HOSTNAME,URL_PORT,URL_HOST_SERVICE = self.URL_SPLITTER(url)
                 
-                path_part = "/"
-                if '/' in URL_SPLIT[1]:
-                    path_part += URL_SPLIT[1].split('/', 1)[1]
-
                 request = self.helpers.buildHttpRequest(URL(url))
                 resp = self.callbacks.makeHttpRequest(URL_HOST_SERVICE, request)
 
