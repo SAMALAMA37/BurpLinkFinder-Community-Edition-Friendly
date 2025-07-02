@@ -1,12 +1,12 @@
 #  BurpLinkFinder Community Edition Friendly - Find links within JS files.
 
-Slightly modified extension to support community edition version of Burp Suite, modified for personal needs
+Slightly modified version to support community edition capabilities of Burp Suite, modified for personal needs
 
-It hasn't been farly tested, so pls report any issues
+It hasn't been farly tested yet, so pls report any issues
 
 
 
-special thanks: Gemini2.5 Pro
+special thanks: Gemini 2.5 Pro
 
 
 
