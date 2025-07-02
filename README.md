@@ -9,7 +9,7 @@ It hasn't been farly tested yet, so pls report any issues
 special thanks: Gemini 2.5 Pro
 
 
-##What's the difference.
+## What's the difference.
 
 The only difference obviously is how the js files are passed.
 Pro version automatically analyzes JS files found in proxy traffic. You can also scan the whole website from a sitemap, while scanning is unavaible in community edition, the files are getting analysed as they pass through the proxy which makes them scanned live while you're browsing.
