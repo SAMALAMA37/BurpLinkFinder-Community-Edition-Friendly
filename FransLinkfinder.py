@@ -1,10 +1,11 @@
 #
 #  BurpLinkFinder - Find links within JS files.
+#  Community Edition Friendly Version
 #
 #  Copyright (c) 2022 Frans Hendrik Botes
 #  Credit to https://github.com/GerbenJavado/LinkFinder for the idea and regex
 #
-from burp import IBurpExtender, IScannerCheck, IScanIssue, ITab
+from burp import IBurpExtender, IHttpListener, IScanIssue, ITab
 from java.io import PrintWriter
 from java.net import URL
 from java.util import ArrayList, List
@@ -17,25 +18,11 @@ from os import path
 from javax import swing
 from java.awt import Font, Color
 from threading import Thread
-#from array import array
 from jarray import array
 from java.awt import EventQueue
 from java.lang import Runnable
-from thread import start_new_thread
-from javax.swing import JFileChooser
-from javax.swing import JScrollPane
-from javax.swing import JSplitPane
-from javax.swing import JTabbedPane
-from javax.swing import JTable
-from javax.swing import JPanel
-from javax.swing import JLabel
-from javax.swing.event import DocumentListener
-from javax.swing import JCheckBox
-from javax.swing import SwingUtilities
-from javax.swing import JTextField
-from javax.swing.table import AbstractTableModel
 import urlparse,threading
-try: 
+try:
     import queue
 except ImportError:
     import Queue as queue
@@ -51,15 +38,16 @@ class Run(Runnable):
 # Needed params
 JSExclusionList = ['jquery', 'google-analytics','gpt.js','modernizr','gtm','fbevents']
 
-class BurpExtender(IBurpExtender, IScannerCheck, ITab):
+class BurpExtender(IBurpExtender, IHttpListener, ITab):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
-        callbacks.setExtensionName("BurpJSLinkFinderv2")
-        callbacks.issueAlert("BurpJSLinkFinderv2 Passive Scanner enabled")
-        #stdout = PrintWriter(callbacks.getStdout(), True)
-        #stderr = PrintWriter(callbacks.getStderr(), True)
-        callbacks.registerScannerCheck(self)
+        callbacks.setExtensionName("BurpJSLinkFinderCE")
+        callbacks.issueAlert("BurpJSLinkFinderCE Passive Scanner enabled")
+
+        # Register as an HTTP listener instead of a scanner check for Community Edition compatibility
+        callbacks.registerHttpListener(self)
+        
         self.threads = []
         self.initUI()
         # customize our UI components
@@ -69,22 +57,20 @@ class BurpExtender(IBurpExtender, IScannerCheck, ITab):
         callbacks.customizeUiComponent(self.filesPane)
         callbacks.customizeUiComponent(self.mapPane)
         callbacks.customizeUiComponent(self._parentPane)
-        callbacks.customizeUiComponent(self._parentPane)
-        callbacks.customizeUiComponent(self._parentPane)
         # add the custom tab to Burp's UI
         callbacks.addSuiteTab(self)
         
-        callbacks.printOutput("BurpJS LinkFinder v2 loaded.")
+        callbacks.printOutput("BurpJS LinkFinder v2 (Community Edition) loaded.")
         callbacks.printOutput("Copyright (c) 2022 Frans Hendrik Botes")
-        self.outputTxtArea.setText("BurpJS LinkFinder loaded." + "\n" + "Copyright (c) 2022 Frans Hendrik Botes" + "\n")
+        self.outputTxtArea.setText("BurpJS LinkFinder (Community Edition) loaded." + "\n" + "Copyright (c) 2022 Frans Hendrik Botes" + "\n")
 
     def initUI(self):
-        self._parentPane = JTabbedPane()
+        self._parentPane = swing.JTabbedPane()
         # The main split pane for the components
-        self._splitpane = JSplitPane(JSplitPane.HORIZONTAL_SPLIT)
+        self._splitpane = swing.JSplitPane(swing.JSplitPane.HORIZONTAL_SPLIT)
         self._splitpane.setDividerLocation(800)
         # The split pane for the mapping and filenames
-        self._splitpane2 = JSplitPane(JSplitPane.VERTICAL_SPLIT)
+        self._splitpane2 = swing.JSplitPane(swing.JSplitPane.VERTICAL_SPLIT)
         self._splitpane2.setDividerLocation(300)
         # UI for Log Output
         self.logPanel = swing.JPanel()
@@ -214,74 +200,81 @@ class BurpExtender(IBurpExtender, IScannerCheck, ITab):
         self._splitpane2.setBottomComponent(self.mapPanel)
         self._splitpane.setRightComponent(self._splitpane2)
         self._parentPane.addTab("Main", self._splitpane)
+        
     def getTabCaption(self):
         return "BurpJSLinkFinder"
+        
     def getUiComponent(self):
         return self._parentPane
+        
     def clearLog(self, event):
-          self.outputTxtArea.setText("BurpJS LinkFinder loaded." + "\n" + "Copyright (c) 2022 Frans Hendrik Botes" + "\n" )
+          self.outputTxtArea.setText("BurpJS LinkFinder (Community Edition) loaded." + "\n" + "Copyright (c) 2022 Frans Hendrik Botes" + "\n" )
+          
     def clearFilseLog(self, event):
           self.filesTxtArea.setText("")
+          
     def clearMAPLog(self, event):
           self.mapTxtArea.setText("")      
+          
     def exportLog(self, event):
-        chooseFile = JFileChooser()
+        chooseFile = swing.JFileChooser()
         ret = chooseFile.showDialog(self.logPane, "Choose file")
-        filename = chooseFile.getSelectedFile().getCanonicalPath()
-        self.callbacks.printOutput("\n" + "Export to : " + filename)
-        open(filename, 'w', 0).write(self.outputTxtArea.text)
-    def doPassiveScan(self, ihrr):      
-        try:
-            urlReq = ihrr.getUrl()
-            testString = str(urlReq)
-            linkA = linkAnalyse(ihrr,self.callbacks,self.helpers)
-            # check if JS file
-            if ".js" in str(urlReq):
-                # Exclude casual JS files
-                if any(x in testString for x in JSExclusionList):
-                    self.callbacks.printOutput("\n" + "[-] URL excluded " + str(urlReq))
-                else:
-                    self.outputTxtArea.append("\n" + "[+] Valid URL found: " + str(urlReq))
-                    issueText = linkA.analyseURL()
-                    links = []
-                    full_urls = []
-                    highlights = []
-                    for counter, issueText in enumerate(issueText):
-                            self.outputTxtArea.append("\n" + "\t" + issueText['link'])
-                            if linkA.valcheckFullURL(issueText['link']) and linkA.valcheckMappedList(issueText['link'],self.mapTxtArea):
-                                self.mapTxtArea.append("\n" + issueText['link'])
-                                full_urls += [issueText['link']]
-                            elif not linkA.valcheckFullURL(issueText['link']):
-                                fullURL = urlparse.urljoin(urlparse.urljoin(str(urlReq), '/'),issueText['link'])
-                                if linkA.valcheckMappedList(fullURL,self.mapTxtArea):
-                                    self.mapTxtArea.append("\n" + fullURL)
-                                full_urls += [fullURL]
-                            
-                            lh = [issueText['start'],issueText['end']]
-                            if issueText['link'] not in links:
-                                links += [issueText['link']]
-                            if lh not in highlights:
-                                highlights += [lh]
-                            
-                            filNam = os.path.basename(issueText['link'])
-                            if linkA.isNotBlank((filNam)):
-                                try:
-                                    filNam = filNam[ 0 : filNam.index("?")]
-                                except:
-                                    filNam = filNam
+        if ret == swing.JFileChooser.APPROVE_OPTION:
+            filename = chooseFile.getSelectedFile().getCanonicalPath()
+            self.callbacks.printOutput("\n" + "Export to : " + filename)
+            # Use try-with-resources to ensure the file is closed
+            try:
+                with open(filename, 'w') as f:
+                    f.write(self.outputTxtArea.text)
+            except IOError as e:
+                self.callbacks.printError("Error writing to file: " + str(e))
 
-                                if (linkA.checkValidFile(filNam)) and (filNam not in self.filesTxtArea.text):
-                                    self.filesTxtArea.append("\n" + filNam)
+    #
+    # implement IHttpListener
+    #
+    def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+        # only process responses
+        if not messageIsRequest:
+            response = messageInfo.getResponse()
+            if response:
+                responseInfo = self.helpers.analyzeResponse(response)
+                mime_type = responseInfo.getStatedMimeType()
+                
+                # Check if it's a JavaScript file
+                if mime_type and 'javascript' in mime_type.lower() or '.js' in str(messageInfo.getUrl()):
+                    try:
+                        urlReq = messageInfo.getUrl()
+                        testString = str(urlReq)
+                        linkA = linkAnalyse(messageInfo, self.callbacks, self.helpers)
+
+                        # Exclude casual JS files
+                        if any(x in testString for x in JSExclusionList):
+                            self.callbacks.printOutput("\n" + "[-] URL excluded " + str(urlReq))
+                        else:
+                            self.outputTxtArea.append("\n" + "[+] Valid URL found: " + str(urlReq))
+                            issueText = linkA.analyseURL()
                             
-                    issues = ArrayList()
-                    if links != []:
-                        issues.add(SRI(ihrr, self.helpers, self.callbacks, links, full_urls, highlights))
-                    return issues
-        except UnicodeEncodeError:
-            self.callbacks.printOutput("Error in URL decode.")
-        return None
-    def consolidateDuplicateIssues(self, isb, isa):
-        return -1
+                            for counter, issue in enumerate(issueText):
+                                self.outputTxtArea.append("\n" + "\t" + issue['link'])
+                                
+                                # Add to Mapped links pane for further actions
+                                fullURL = issue['link']
+                                if not linkA.valcheckFullURL(issue['link']):
+                                    fullURL = urlparse.urljoin(str(urlReq), issue['link'])
+                                
+                                if linkA.valcheckMappedList(fullURL, self.mapTxtArea):
+                                    self.mapTxtArea.append("\n" + fullURL)
+                                
+                                # Add to Filenames pane
+                                filNam = path.basename(issue['link'].split('?')[0])
+                                if linkA.isNotBlank(filNam) and linkA.checkValidFile(filNam) and (filNam not in self.filesTxtArea.text):
+                                    self.filesTxtArea.append("\n" + filNam)
+
+                    except UnicodeEncodeError:
+                        self.callbacks.printOutput("Error in URL decode.")
+                    except Exception as e:
+                        self.callbacks.printError("Error in processHttpMessage: " + str(e))
+
     def extensionUnloaded(self):
         self.callbacks.printOutput("BurpJS LinkFinder v2 unloaded")
         return
@@ -292,8 +285,9 @@ class BurpExtender(IBurpExtender, IScannerCheck, ITab):
         urls_list = list(set(get_all_urls.split('\n')))
 
         for url in urls_list:
-            url = url.rstrip()
-            self.q.put(url)
+            url = url.strip()
+            if url:
+                self.q.put(url)
 
         for j in range(10):
             t = threading.Thread(target=self.ProcessQueue)
@@ -305,71 +299,39 @@ class BurpExtender(IBurpExtender, IScannerCheck, ITab):
             each_url = self.q.get()
             self.ProcessURL(each_url)
             self.q.task_done()
-            self.mapTxtArea.setText("")        
-
+        
     def URL_SPLITTER(self,url):
         URL_SPLIT = str(url).split("://",1)
         URL_PROTOCAL = URL_SPLIT[0]
-        if URL_PROTOCAL == 'https':
-            URL_PORT = 443
-        elif URL_PROTOCAL == 'http':
-            URL_PORT = 80
-        else:
-            URL_PORT = 443
-        URL_HOSTNAME = URL_SPLIT[1].split('/',1)[0].split('?',1)[0]
+        URL_PORT = 443 if URL_PROTOCAL == 'https' else 80
+        
+        URL_HOSTNAME_PATH = URL_SPLIT[1]
+        URL_HOSTNAME = URL_HOSTNAME_PATH.split('/')[0].split('?')[0]
+        
         if ':' in URL_HOSTNAME:
-            URL_HOSTNAME_FOR_SPLIT = URL_HOSTNAME
-            URL_HOSTNAME = URL_HOSTNAME_FOR_SPLIT.split(':')[0]
-            URL_PORT = int(URL_HOSTNAME_FOR_SPLIT.split(':')[1])
-        URL_HOST_FULL = URL_PROTOCAL+"://"+URL_HOSTNAME
-        try:
-            URL_HOST_SERVICE = self.helpers.buildHttpService(URL_HOSTNAME,URL_PORT,URL_PROTOCAL)
-        except java.lang.IllegalArgumentException:
-            self.callbacks.printOutput("EXCEPTION BECAUSE HTTPSERVICE VALUES IS INVALID : {} : ".format(url))
-            self.callbacks.printOutput("EXCEPTION VALUES ARE :",URL_HOSTNAME,URL_PORT,URL_PROTOCAL)
-        return URL_SPLIT,URL_PROTOCAL,URL_HOSTNAME,URL_PORT,URL_HOST_FULL,URL_HOST_SERVICE
+            URL_HOSTNAME, URL_PORT_STR = URL_HOSTNAME.split(':', 1)
+            URL_PORT = int(URL_PORT_STR)
+            
+        URL_HOST_SERVICE = self.helpers.buildHttpService(URL_HOSTNAME, URL_PORT, URL_PROTOCAL == 'https')
+        return URL_SPLIT, URL_PROTOCAL, URL_HOSTNAME, URL_PORT, URL_HOST_SERVICE
+
 
     def ProcessURL(self,url):
-        #print(url)
         if url.startswith('http://') or url.startswith('https://'):
-            URL_SPLIT,URL_PROTOCAL,URL_HOSTNAME,URL_PORT,URL_HOST_FULL,URL_HOST_SERVICE = self.URL_SPLITTER(url)
             try:
-                HEADERS = ["GET /"+str(URL_SPLIT[1].split('/',1)[1])+" HTTP/1.1",'Host: '+str(URL_HOSTNAME)]
-            except:
-                novar = 1
-                #print("URL EXCEPTION IN HEADERS : {} : {}".format(url,URL_SPLIT))
-            msg = self.helpers.buildHttpMessage(HEADERS,None)
-            resp = self.callbacks.makeHttpRequest(URL_HOST_SERVICE,msg)
-            if resp.getResponse() != None:
-                resp_analyze = self.helpers.analyzeResponse(resp.getResponse())
-                self.callbacks.addToSiteMap(resp)
-                resp_heads = resp_analyze.getHeaders()
-                if '301' in resp_heads[0] or 'Moved' in resp_heads[1] or '307' in resp_heads[0] or '302' in resp_heads[0]:
-                    for each_head in resp_heads:
-                        if each_head.startswith('Location:') or each_head.startswith('location:'):
-                            location_value = each_head.split(":",1)[1].strip(' ')
-                            if location_value.startswith('http'):
-                                URL_SPLIT,URL_PROTOCAL,URL_HOSTNAME,URL_PORT,URL_HOST_FULL,URL_HOST_SERVICE = self.URL_SPLITTER(location_value)
-                                try:
-                                    HEADERS = ["GET /"+str(URL_SPLIT[1].split('/',1)[1])+" HTTP/1.1",'Host: '+str(URL_HOSTNAME)]
-                                except:
-                                    #print("URL EXCEPTION IN REDIRECTION HEADERS : {}".format(URL_SPLIT))
-                                    return False
-                                if self.HEADERS:
-                                    for each_header in self.HEADERS:
-                                        if each_header not in HEADERS:
-                                            HEADERS.append(each_header)
-                            elif location_value.startswith('/'):
-                                HEADERS = ["GET "+str(location_value)+" HTTP/1.1",'Host: '+str(URL_HOSTNAME)]
-                                if self.HEADERS:
-                                    for each_header in self.HEADERS:
-                                        if each_header not in HEADERS:
-                                            HEADERS.append(each_header)
-                            else:
-                                pass
-                            msg = self.helpers.buildHttpMessage(HEADERS,None)
-                            resp = self.callbacks.makeHttpRequest(URL_HOST_SERVICE,msg)            
-                            self.callbacks.addToSiteMap(resp)
+                URL_SPLIT,URL_PROTOCAL,URL_HOSTNAME,URL_PORT,URL_HOST_SERVICE = self.URL_SPLITTER(url)
+                
+                path_part = "/"
+                if '/' in URL_SPLIT[1]:
+                    path_part += URL_SPLIT[1].split('/', 1)[1]
+
+                request = self.helpers.buildHttpRequest(URL(url))
+                resp = self.callbacks.makeHttpRequest(URL_HOST_SERVICE, request)
+
+                if resp and resp.getResponse():
+                    self.callbacks.addToSiteMap(resp)
+            except Exception as e:
+                self.callbacks.printError("Error processing URL for site map: {} ({})".format(url, e))
 
 class linkAnalyse():
     
@@ -378,162 +340,90 @@ class linkAnalyse():
         self.helpers = helpers
         self.reqres = reqres
         
-
     regex_str = """
-    
       (?:"|')                               # Start newline delimiter
-    
       (
         ((?:[a-zA-Z]{1,10}://|//)           # Match a scheme [a-Z]*1-10 or //
         [^"'/]{1,}\.                        # Match a domainname (any character + dot)
         [a-zA-Z]{2,}[^"']{0,})              # The domainextension and/or path
-    
         |
-    
         ((?:/|\.\./|\./)                    # Start with /,../,./
         [^"'><,;| *()(%%$^/\\\[\]]          # Next character can't be...
         [^"'><,;|()]{1,})                   # Rest of the characters can't be
-    
         |
-    
         ([a-zA-Z0-9_\-/]{1,}/               # Relative endpoint with /
         [a-zA-Z0-9_\-/.]{1,}                # Resource name
         \.(?:[a-zA-Z]{1,4}|action)          # Rest + extension (length 1-4 or action)
         (?:[\?|/][^"|']{0,}|))              # ? mark with parameters
-    
         |
-
         ([a-zA-Z0-9_\-/]{1,}/               # REST API (no extension) with /
         [a-zA-Z0-9_\-/]{3,}                 # Proper REST endpoints usually have 3+ chars
         (?:[\?|#][^"|']{0,}|))              # ? or # mark with parameters
-
         |
-    
         ([a-zA-Z0-9_\-]{1,}                 # filename
         \.(?:php|asp|aspx|jsp|json|
              action|html|js|txt|xml)        # . + extension
         (?:\?[^"|']{0,}|))                  # ? mark with parameters
-    
       )
-    
       (?:"|')                               # End newline delimiter
-    
     """     
 
-    def parser_file(self, content, regex_str, mode=1, more_regex=None, no_dup=1):
-        #print ("TEST parselfile #2")
+    def parser_file(self, content, regex_str, no_dup=1):
         regex = re.compile(regex_str, re.VERBOSE)
         items = [{"link": m.group(1),"start":m.start(1),"end":m.end(1)} for m in re.finditer(regex, content)]
         if no_dup:
-            # Remove duplication
             all_links = set()
             no_dup_items = []
             for item in items:
                 if item["link"] not in all_links:
                     all_links.add(item["link"])
                     no_dup_items.append(item)
-            items = no_dup_items
-    
-        # Match Regex
-        filtered_items = []
-        for item in items:
-            # Remove other capture groups from regex results
-            if more_regex:
-                if re.search(more_regex, item["link"]):
-                    #print ("TEST parselfile #3")
-                    filtered_items.append(item)
-            else:
-                filtered_items.append(item)
-        return filtered_items
-    # Potential for use in the future...
-    def threadAnalysis(self):
-        thread = Thread(target=self.analyseURL(), args=(session,))
-        thread.daemon = True
-        thread.start()
+            return no_dup_items
+        return items
 
     def analyseURL(self):      
-        endpoints = ""
-        mime_type=self.helpers.analyzeResponse(self.reqres.getResponse()).getStatedMimeType()
-        if mime_type.lower() == 'script':
-                url = self.reqres.getUrl()
-                encoded_resp=binascii.b2a_base64(self.reqres.getResponse())
-                decoded_resp=base64.b64decode(encoded_resp)
-                endpoints=self.parser_file(decoded_resp, self.regex_str)
-                return endpoints
-        return endpoints
+        responseBytes = self.reqres.getResponse()
+        if responseBytes:
+            decoded_resp = self.helpers.bytesToString(responseBytes)
+            return self.parser_file(decoded_resp, self.regex_str)
+        return []
 
     def checkValidFile(self,fileNam):
-        regexFile = """^[a-zA-Z0-9](?:[a-zA-Z0-9 ._-]*[a-zA-Z0-9])?.[a-zA-Z0-9_-][.].*"""
-        try:
-            if fileNam and fileNam.strip():
-                return bool(re.search(regexFile, fileNam))
-            
-        except:
-
-
-            return False
+        regexFile = r"^[a-zA-Z0-9](?:[a-zA-Z0-9 ._-]*[a-zA-Z0-9])?\.[a-zA-Z0-9_-][.].*"
+        return fileNam and fileNam.strip() and bool(re.search(regexFile, fileNam))
        
     def isNotBlank(self,myString):
-        try:
-            if myString and myString.strip():
-                #myString is not None AND myString is not empty or blank
-                return True
-            #myString is None OR myString is empty or blank
-        except:
-            return False
+        return myString and myString.strip()
 
     def valcheckMappedList(self,myString,mapTxtArea):
-        #Checks if the extracted URL is a full URL or if already in the mapped list
-        #print("Checking URL: " + myString)
-        try:
-            if (myString in mapTxtArea.text):
-                #print("Found HTTP in URL: " + myString)
-                return False
-            
-        except Exception as e:
-            self.callbacks.printOutput(myString + "\t" + str(e))
-            return True
-        
-        #print("Returning Default: " + myString)
-        return True
+        # This check is inherently slow on large text areas. 
+        # A set would be better for performance, but for UI consistency, this is acceptable.
+        return myString not in mapTxtArea.text
     
     def valcheckFullURL(self,myString):
-        try:
-            if (myString[:4].lower() == 'http'):
-                return True
-        except Exception as e:
-            self.callbacks.printOutput(myString + "\t" + str(e))
-        return False
+        return myString.lower().startswith(('http:', 'https:'))
 
-class SRI(IScanIssue,ITab):
+# This class is not used to raise issues in Community Edition, but is kept for structure.
+class SRI(IScanIssue):
     def __init__(self, reqres, helpers, callbacks, links, full_urls, highlights):
         self.helpers = helpers
         self.callbacks = callbacks
+        self.links = sorted(list(set(links)))
+        self.full_urls = sorted(list(set(full_urls)))
         
-        self.links = links
-        self.links.sort()
-        self.full_urls = full_urls
-        self.full_urls.sort()
-
         al = ArrayList()
-        i=0
-        while i<len(highlights):
-            al.add(array([highlights[i][0],highlights[i][1]],'i'))
-            i+=1
-        self.highlights = al
-        self.reqres = self.callbacks.applyMarkers(reqres,None,self.highlights)
+        for h in highlights:
+            al.add(array([h[0], h[1]], 'i'))
+        
+        self.reqres = self.callbacks.applyMarkers(reqres, None, al)
         
         self.issue_detail = "Burp Scanner has analysed this JS file and has discovered the following link values: <ul>\n"
-        i=0
-        while i<len(self.links):
-            self.issue_detail += "<li>{}</li>\n".format(cgi.escape(self.links[i]))
-            i+=1
+        for link in self.links:
+            self.issue_detail += "<li>{}</li>\n".format(cgi.escape(link))
         self.issue_detail += "</ul>The following full normalized URLs were generated from the discovered link values: <ul>\n"
-        i=0
-        while i<len(self.full_urls):
-            self.issue_detail += "<li>{}</li>\n".format(cgi.escape(self.full_urls[i]))
-            i+=1
-        self.issue_detail = str(self.issue_detail)
+        for url in self.full_urls:
+            self.issue_detail += "<li>{}</li>\n".format(cgi.escape(url))
+        self.issue_detail += "</ul>"
 
     def getHost(self):
         return self.reqres.getHost()
@@ -551,16 +441,16 @@ class SRI(IScanIssue,ITab):
         return "Linkfinder Analysed JS files"
 
     def getIssueType(self):
-        return 0x08000000  # See http:#portswigger.net/burp/help/scanner_issuetypes.html
+        return 0x08000000
 
     def getSeverity(self):
-        return "Information"  # "High", "Medium", "Low", "Information" or "False positive"
+        return "Information"
 
     def getConfidence(self):
-        return "Certain"  # "Certain", "Firm" or "Tentative"
+        return "Certain"
 
     def getIssueBackground(self):
-        return str("JS files holds links to other parts of web applications. Refer to TAB for results.")
+        return "JS files can hold links to other parts of web applications. This extension passively finds them and reports them for further investigation."
 
     def getRemediationBackground(self):
         return None
@@ -572,13 +462,7 @@ class SRI(IScanIssue,ITab):
         return None
 
     def getHttpMessages(self):
-        #print ("................raising issue................")
-        rra = [self.reqres]
-        return rra
+        return [self.reqres]
         
     def getHttpService(self):
         return self.reqres.getHttpService()
-        
-        
-if __name__ in ('__main__', 'main'):
-    EventQueue.invokeLater(Run(BurpExtender))
