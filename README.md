@@ -10,6 +10,7 @@ special thanks: Gemini 2.5 Pro
 
 
 
+## The Behaviour of the Detection itself is not altered, both versions should produce the same results
              
 ![Follow on Twitter](https://img.shields.io/twitter/follow/frans_initroot?label=Follow%20&style=social)
 ![GitHub last commit](https://img.shields.io/github/last-commit/initroot/BurpJSLinkFinder)
