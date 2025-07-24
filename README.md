@@ -50,10 +50,6 @@ JSExclusionList = ['jquery', 'google-analytics','gpt.js','modernizr','gtm','fbev
 
 ```
 
-## Usage
-Instructions based on the most recent versions of Burp. The following configurations are advised:
-- Set target scope under Target --> Scope --> Advance scope --> Keyword
-- Set scanners to only scan scoped items e.g. Dashboard --> Live scanner and Live audit set URL Scope to Suite Scope
 
 ##  Screenshot
 ![Screen Recording 2021-12-31 at 10 43 36](https://user-images.githubusercontent.com/954507/147813394-50564827-d017-446d-8bdc-b21022da2114.gif)
