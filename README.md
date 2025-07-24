@@ -4,6 +4,8 @@ Slightly modified version to support community edition capabilities of Burp Suit
 
 It hasn't been farly tested yet, so pls report any issues
 
+<img width="1166" height="998" alt="image" src="https://github.com/user-attachments/assets/d3c368e7-47cf-4d75-9e9d-3f86020f63e7" />
+
 
 
 special thanks: Gemini 2.5 Pro
