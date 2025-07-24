@@ -5,7 +5,7 @@
 #  Copyright (c) 2022 Frans Hendrik Botes
 #  Credit to https://github.com/GerbenJavado/LinkFinder for the idea and regex
 #
-#  --- Corrected and Refactored Version (Scope Check Removed) ---
+#  --- Corrected and Refactored Version (Thread-Safe Duplicate Check) ---
 #
 from burp import IBurpExtender, IHttpListener, IScanIssue, ITab
 from java.io import PrintWriter
@@ -46,10 +46,16 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.helpers = callbacks.getHelpers()
         callbacks.setExtensionName("BurpJSLinkFinderCE")
 
-        # --- Sets for efficient duplicate checking ---
+        # --- Data stores ---
+        self.full_log_lines = []
         self.processed_urls = set()
         self.mapped_urls_set = set()
         self.found_filenames_set = set()
+        self.globally_discovered_links = set()
+        
+        # FIX: Add threading locks to prevent race conditions during duplicate checks
+        self.map_lock = threading.Lock()
+        self.files_lock = threading.Lock()
         
         self.threads = []
         self.initUI()
@@ -70,7 +76,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         
         callbacks.printOutput("BurpJS LinkFinder v2 (Community Edition) loaded.")
         callbacks.printOutput("Copyright (c) 2022 Frans Hendrik Botes")
-        self.outputTxtArea.setText("BurpJS LinkFinder (Community Edition) loaded.\nCopyright (c) 2022 Frans Hendrik Botes\n")
+        # Set initial state
+        self.reset_log_and_state()
+
 
     def initUI(self):
         self._parentPane = swing.JTabbedPane()
@@ -89,6 +97,11 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.outputTxtArea.setFont(Font("Consolas", Font.PLAIN, 10))
         self.outputTxtArea.setLineWrap(True)
         self.logPane.setViewportView(self.outputTxtArea)
+        
+        # --- Search components ---
+        self.searchField = swing.JTextField(30)
+        self.searchBtn = swing.JButton("Search", actionPerformed=self.searchLog)
+        
         self.clearBtn = swing.JButton("Clear", actionPerformed=self.clearLog)
         self.exportBtn = swing.JButton("Export", actionPerformed=self.exportLog)
         
@@ -96,17 +109,28 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.logPanel.setLayout(layout)
         layout.setAutoCreateGaps(True)
         layout.setAutoCreateContainerGaps(True)
+        
         layout.setHorizontalGroup(
             layout.createParallelGroup()
             .addComponent(self.outputLabel)
             .addComponent(self.logPane)
-            .addGroup(layout.createSequentialGroup().addComponent(self.clearBtn).addComponent(self.exportBtn))
+            .addGroup(layout.createSequentialGroup()
+                .addComponent(self.searchField, swing.GroupLayout.PREFERRED_SIZE, swing.GroupLayout.DEFAULT_SIZE, swing.GroupLayout.PREFERRED_SIZE)
+                .addComponent(self.searchBtn))
+            .addGroup(layout.createSequentialGroup()
+                .addComponent(self.clearBtn)
+                .addComponent(self.exportBtn))
         )
         layout.setVerticalGroup(
             layout.createSequentialGroup()
             .addComponent(self.outputLabel)
             .addComponent(self.logPane)
-            .addGroup(layout.createParallelGroup().addComponent(self.clearBtn).addComponent(self.exportBtn))
+            .addGroup(layout.createParallelGroup(swing.GroupLayout.Alignment.BASELINE)
+                .addComponent(self.searchField)
+                .addComponent(self.searchBtn))
+            .addGroup(layout.createParallelGroup(swing.GroupLayout.Alignment.BASELINE)
+                .addComponent(self.clearBtn)
+                .addComponent(self.exportBtn))
         )
         
         # --- Filenames Panel ---
@@ -160,17 +184,46 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
     def getUiComponent(self):
         return self._parentPane
 
+    def searchLog(self, event):
+        searchTerm = self.searchField.getText()
+        
+        if not searchTerm:
+            full_log_text = "\n".join(self.full_log_lines)
+            self.outputTxtArea.setText(full_log_text)
+            return
+
+        searchTermLower = searchTerm.lower()
+        matching_lines = [line for line in self.full_log_lines if searchTermLower in line.lower()]
+        filtered_log_text = "\n".join(matching_lines)
+        self.outputTxtArea.setText(filtered_log_text)
+
+    def add_log_entry(self, text_line):
+        self.full_log_lines.append(text_line)
+        if not self.searchField.getText():
+            update_text = "\n" + text_line
+            EventQueue.invokeLater(Run(lambda: self.outputTxtArea.append(update_text)))
+
     def clearLog(self, event):
-        self.outputTxtArea.setText("BurpJS LinkFinder (Community Edition) loaded.\nCopyright (c) 2022 Frans Hendrik Botes\n")
+        self.reset_log_and_state()
+
+    def reset_log_and_state(self):
+        initial_header = "BurpJS LinkFinder (Community Edition) loaded."
+        initial_copyright = "Copyright (c) 2022 Frans Hendrik Botes"
+        self.full_log_lines = [initial_header, initial_copyright]
+        self.outputTxtArea.setText(initial_header + "\n" + initial_copyright)
+        self.searchField.setText("")
         self.processed_urls.clear()
+        self.globally_discovered_links.clear()
 
     def clearFilesLog(self, event):
-        self.filesTxtArea.setText("")
-        self.found_filenames_set.clear()
+        with self.files_lock:
+            self.filesTxtArea.setText("")
+            self.found_filenames_set.clear()
 
     def clearMapLog(self, event):
-        self.mapTxtArea.setText("")
-        self.mapped_urls_set.clear()
+        with self.map_lock:
+            self.mapTxtArea.setText("")
+            self.mapped_urls_set.clear()
 
     def exportLog(self, event):
         chooseFile = swing.JFileChooser()
@@ -191,8 +244,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         url = messageInfo.getUrl()
         url_str = str(url)
 
-        # Check if the URL has already been processed
-        # The scope check has been removed as per the user's request.
         if url_str in self.processed_urls:
             return
 
@@ -203,19 +254,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         responseInfo = self.helpers.analyzeResponse(response)
         mime_type = responseInfo.getStatedMimeType().lower()
         
-        # Check if it's a JS or JSON file
         if 'javascript' in mime_type or 'json' in mime_type or url_str.endswith(('.js', '.json')):
-            
-            # Add to processed set before analysis
             self.processed_urls.add(url_str)
             
-            # Exclude common JS libraries
             if any(x in url_str for x in JSExclusionList):
                 self.callbacks.printOutput("\n" + "[-] URL excluded: " + url_str)
                 return
             
-            # THREADING FIX: Safely update the UI
-            EventQueue.invokeLater(Run(lambda: self.outputTxtArea.append("\n" + "[+] Analyzing: " + url_str)))
+            self.add_log_entry("[+] Analyzing: " + url_str)
             
             try:
                 linkA = linkAnalyse(messageInfo, self.callbacks, self.helpers)
@@ -223,32 +269,34 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 
                 for issue in issueText:
                     link = issue['link']
-                    # THREADING FIX: Safely update the UI
-                    EventQueue.invokeLater(Run(lambda: self.outputTxtArea.append("\n" + "\t" + link)))
                     
-                    # Construct full URL
+                    if link not in self.globally_discovered_links:
+                        self.globally_discovered_links.add(link)
+                        self.add_log_entry("\t" + link)
+                    
                     fullURL = urlparse.urljoin(url_str, link) if not linkA.valcheckFullURL(link) else link
                     
-                    # PERFORMANCE FIX: Use set for efficient duplicate check
-                    if fullURL not in self.mapped_urls_set:
-                        self.mapped_urls_set.add(fullURL)
-                        # THREADING FIX: Safely update the UI
-                        EventQueue.invokeLater(Run(lambda: self.mapTxtArea.append("\n" + fullURL)))
+                    # FIX: Use a lock to make the check-and-add atomic
+                    with self.map_lock:
+                        if fullURL not in self.mapped_urls_set:
+                            self.mapped_urls_set.add(fullURL)
+                            # FIX: Capture the loop variable correctly in the lambda
+                            EventQueue.invokeLater(Run(lambda url=fullURL: self.mapTxtArea.append("\n" + url)))
                     
-                    # Extract and check filename
                     filNam = path.basename(link.split('?')[0])
                     if linkA.isNotBlank(filNam) and linkA.checkValidFile(filNam):
-                         # PERFORMANCE FIX: Use set for efficient duplicate check
-                        if filNam not in self.found_filenames_set:
-                            self.found_filenames_set.add(filNam)
-                            # THREADING FIX: Safely update the UI
-                            EventQueue.invokeLater(Run(lambda: self.filesTxtArea.append("\n" + filNam)))
-
+                        # FIX: Use a lock to make the check-and-add atomic
+                        with self.files_lock:
+                            if filNam not in self.found_filenames_set:
+                                self.found_filenames_set.add(filNam)
+                                # FIX: Capture the loop variable correctly in the lambda
+                                EventQueue.invokeLater(Run(lambda fn=filNam: self.filesTxtArea.append("\n" + fn)))
             except Exception as e:
                 self.callbacks.printError("Error in processHttpMessage: " + str(e))
 
     def mapMaps(self, event):
         self.q = queue.Queue()
+        # It's safe to read the text area without a lock
         get_all_urls = self.mapTxtArea.getText()
         urls_list = list(set(get_all_urls.split('\n')))
 
@@ -257,7 +305,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             if url:
                 self.q.put(url)
 
-        for _ in range(10): # Start 10 worker threads
+        for _ in range(10):
             t = threading.Thread(target=self.ProcessQueue)
             self.threads.append(t)
             t.start()
@@ -269,7 +317,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 self.ProcessURL(each_url)
                 self.q.task_done()
             except queue.Empty:
-                return # Queue is empty
+                return
         
     def URL_SPLITTER(self, url):
         URL_SPLIT = str(url).split("://", 1)
@@ -287,8 +335,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         if url.startswith(('http://', 'https://')):
             try:
                 parsed_url = URL(url)
-                # NOTE: A scope check is kept here intentionally. This prevents the "Add to Site Map"
-                # feature from sending requests to out-of-scope targets, which is usually undesirable.
                 if not self.callbacks.isInScope(parsed_url):
                     return
             
@@ -296,7 +342,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 request = self.helpers.buildHttpRequest(parsed_url)
                 resp = self.callbacks.makeHttpRequest(URL_HOST_SERVICE, request)
 
-                # addToSiteMap is thread-safe
                 if resp:
                     self.callbacks.addToSiteMap(resp)
             except Exception as e:
@@ -307,7 +352,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         return
 
 class linkAnalyse():
-    
     def __init__(self, reqres, callbacks, helpers):
         self.callbacks = callbacks
         self.helpers = helpers
@@ -362,7 +406,6 @@ class linkAnalyse():
         return []
     
     def checkValidFile(self, fileNam):
-        # REGEX FIX: Corrected regex to validate filenames with extensions.
         regexFile = r'^[\w\s.-]+\.[a-zA-Z0-9]{2,10}$'
         return fileNam and fileNam.strip() and bool(re.search(regexFile, fileNam))
        
@@ -372,8 +415,6 @@ class linkAnalyse():
     def valcheckFullURL(self, myString):
         return myString.lower().startswith(('http:', 'https:'))
 
-# NOTE: The SRI class is defined but not used in the current version of the extension.
-# It is intended for creating custom Burp Scanner issues.
 class SRI(IScanIssue):
     def __init__(self, reqres, helpers, callbacks, links, full_urls, highlights):
         self.helpers = helpers
