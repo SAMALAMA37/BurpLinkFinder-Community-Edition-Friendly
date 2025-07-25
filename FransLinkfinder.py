@@ -69,6 +69,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         callbacks.customizeUiComponent(self.filesPane)
         callbacks.customizeUiComponent(self.mapPane)
         callbacks.customizeUiComponent(self._parentPane)
+        callbacks.customizeUiComponent(self.keywordField)
+        callbacks.customizeUiComponent(self.keywordLabel)
+
 
         # Add the custom tab to Burp's UI
         callbacks.addSuiteTab(self)
@@ -100,12 +103,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.outputTxtArea.setLineWrap(True)
         self.logPane.setViewportView(self.outputTxtArea)
 
-        # --- Search components ---
+        # --- Search and Filter components ---
         self.searchField = swing.JTextField(30)
         self.searchBtn = swing.JButton("Search", actionPerformed=self.searchLog)
-
         self.clearBtn = swing.JButton("Clear", actionPerformed=self.clearLog)
         self.exportBtn = swing.JButton("Export", actionPerformed=self.exportLog)
+        self.keywordLabel = swing.JLabel("Analyze URLs containing keyword:")
+        self.keywordField = swing.JTextField(30)
+
 
         layout = swing.GroupLayout(self.logPanel)
         self.logPanel.setLayout(layout)
@@ -120,6 +125,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 .addComponent(self.searchField, swing.GroupLayout.PREFERRED_SIZE, swing.GroupLayout.DEFAULT_SIZE, swing.GroupLayout.PREFERRED_SIZE)
                 .addComponent(self.searchBtn))
             .addGroup(layout.createSequentialGroup()
+                .addComponent(self.keywordLabel)
+                .addComponent(self.keywordField, swing.GroupLayout.PREFERRED_SIZE, swing.GroupLayout.DEFAULT_SIZE, swing.GroupLayout.PREFERRED_SIZE))
+            .addGroup(layout.createSequentialGroup()
                 .addComponent(self.clearBtn)
                 .addComponent(self.exportBtn))
         )
@@ -130,6 +138,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             .addGroup(layout.createParallelGroup(swing.GroupLayout.Alignment.BASELINE)
                 .addComponent(self.searchField)
                 .addComponent(self.searchBtn))
+            .addGroup(layout.createParallelGroup(swing.GroupLayout.Alignment.BASELINE)
+                .addComponent(self.keywordLabel)
+                .addComponent(self.keywordField))
             .addGroup(layout.createParallelGroup(swing.GroupLayout.Alignment.BASELINE)
                 .addComponent(self.clearBtn)
                 .addComponent(self.exportBtn))
@@ -158,6 +169,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             .addComponent(self.fileNamesLabel)
             .addComponent(self.filesPane)
             .addGroup(layoutf.createSequentialGroup()
+                # **CORRECTED** Case-sensitive constant from preferred_size to PREFERRED_SIZE
                 .addComponent(self.filesSearchField, swing.GroupLayout.PREFERRED_SIZE, swing.GroupLayout.DEFAULT_SIZE, swing.GroupLayout.PREFERRED_SIZE)
                 .addComponent(self.filesSearchBtn))
             .addComponent(self.clearFilesBtn)
@@ -280,6 +292,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.full_log_lines = [initial_header, initial_copyright]
         self.outputTxtArea.setText(initial_header + "\n" + initial_copyright)
         self.searchField.setText("")
+        self.keywordField.setText("")
         self.processed_urls.clear()
         self.globally_discovered_links.clear()
         self.clearFilesLog(None)
@@ -320,6 +333,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
 
         url = messageInfo.getUrl()
         url_str = str(url)
+
+        # Check if the URL should be analyzed based on the keyword
+        keyword = self.keywordField.getText()
+        if keyword and keyword.lower() not in url_str.lower():
+            return
+
 
         if url_str in self.processed_urls:
             return
